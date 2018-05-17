@@ -143,9 +143,7 @@ class nn_hardware_platform
         short int m_fmaspc;
         unsigned long long m_max_bandwidth;
 };
-// TODO:
-// - user params
-/*
+
 void prepareTensor(std::unique_ptr<unsigned char[]>& input, std::string& imageName,unsigned int* inputLength)
 {
   // load an image using OpenCV
@@ -184,15 +182,23 @@ void prepareTensor(std::unique_ptr<unsigned char[]>& input, std::string& imageNa
   std::vector<cv::Mat> input_channels(net_data_channels);
   cv::split(sample_fp32_normalized, input_channels);
 
-  // convert image data into float16
-  input.reset(new unsigned char[sizeof(short)*net_data_width*net_data_height*net_data_channels]);
-  floattofp16(input.get(), reinterpret_cast<float*>(sample_fp32_normalized.data),
-        net_data_width*net_data_height*net_data_channels);
+  // TODO: check performance of floats vs halffloat
+  input.reset(new unsigned char[net_data_width*net_data_height*net_data_channels]);
+	int dst_index = 0;
+	for(auto& mat : input_channels) {
+		for(int i=0; i<net_data_width*net_data_height;++i) {
+			input[dst_index++] = ((float*)mat.data)[i];
+		}
+	}
+
+  //floattofp16(input.get(), reinterpret_cast<float*>(sample_fp32_normalized.data),
+  //      net_data_width*net_data_height*net_data_channels);
  
-  *inputLength = sizeof(short)*net_data_width*net_data_height*net_data_channels;
+  //*inputLength = sizeof(short)*net_data_width*net_data_height*net_data_channels;
+  *inputLength = net_data_width*net_data_height*net_data_channels;
 }
 
-
+/*
 void printPredictions(void* outputTensor,unsigned int outputLength)
 {
 	unsigned int net_output_width = outputLength/sizeof(short);
@@ -219,7 +225,7 @@ void printPredictions(void* outputTensor,unsigned int outputLength)
 	}
 	std::cout << "top-1: " << top1_result << " (" << top1_class << ")" << std::endl;
 }
-
+*/
 
 void loadGraphFromFile(std::unique_ptr<char[]>& graphFile, const std::string& graphFileName, unsigned int* graphSize)
 {
@@ -244,7 +250,7 @@ void loadGraphFromFile(std::unique_ptr<char[]>& graphFile, const std::string& gr
   
   ifs.close();
 }
-
+/*
 void printProfiling(float* dataPtr, unsigned int numEntries)
 {
 	std::cout << "Performance profiling:" << std::endl;
@@ -265,8 +271,7 @@ int main(int argc, char** argv) {
         "Usage:\n"
         "    test_ncs [FLAGS]\n");
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  void * graphHandle = nullptr;
-	void* dev_handle = 0;
+  struct ncGraphHandle_t* graphHandlePtr = nullptr;
 	std::vector<std::string> ncs_names;
   const std::string graphFileName("myGoogleNet-shave12");
   nn_hardware_platform machine;
@@ -274,65 +279,99 @@ int main(int argc, char** argv) {
   machine.get_platform_info(pi);
   int exit_code = 0;
   ncStatus_t ret = NC_OK;
-/*
+	struct ncDeviceHandle_t* deviceHandle = nullptr;
+	int index = 0;  // Index of device to query for
+	struct ncFifoHandle_t* inputFIFO;
+	struct ncFifoHandle_t* outputFIFO;
+	struct ncTensorDescriptor_t inputDescriptor;
+	struct ncTensorDescriptor_t outputDescriptor;
+
   try {
     
-    if(argc != 2 ) {
+    if(argc < 2 ) {
       throw std::string("ERROR: Wrong syntax. Valid syntax:\n \
-               test-ncs <name of image to process> \n \
+               test-ncs <names of image to process> \n \
                 ");
     }
     std::string imageFileName(argv[1]);
 		// Set verbose mode for a work with NCS device
-		int verbosity = 2;	// Be more verbose
-	  ret = mvncSetGlobalOption(0, reinterpret_cast<const void*>(&verbosity),sizeof(int));
-    if(ret != MVNC_OK) {
-      throw std::string("Error: Could not set global option of loggin ") + std::string(" Error code: " + std::to_string(ret));
-    }
 
-    char tmpncsname[200]; // How to determine max size automatically
-    int index = 0;  // Index of device to query for
-    while(ret == MVNC_OK) {
-      ret = mvncGetDeviceName(index++,tmpncsname,200); // hardcoded max name size 
-      if (ret == MVNC_OK) {
-        ncs_names.push_back(tmpncsname); 
-        std::cout << "Found NCS: " << tmpncsname << std::endl;
+    while(ret == NC_OK) {
+      ret = ncDeviceCreate(index++,&deviceHandle); // hardcoded max name size 
+      if (ret == NC_OK) {
+        std::cout << "Found NCS named: " << (index-1) << std::endl;
       }
     }
 
     // If not devices present the exit
-    if (ncs_names.size() == 0) {
+    if (index == 1) {
       throw std::string("Error: No Intel Movidius identified in a system!\n");
     }
-
     // Using first device
-    // TODO: run workload on many devices
-    ret = mvncOpenDevice(ncs_names[0].c_str(), &dev_handle);
-    if(ret != MVNC_OK) {
-      throw std::string("Error: Could not open NCS device: ") + ncs_names[0] ;
+    ret = ncDeviceOpen(deviceHandle);
+    if(ret != NC_OK) {
+      throw std::string("Error: Could not open NCS device: ") + std::to_string(index-1) ;
     }
 
 
-    // Allocate graph
+    // Creation of  graph resources
     unsigned int graphSize = 0;
     std::unique_ptr<char[]> graphFile;
     loadGraphFromFile(graphFile, graphFileName, &graphSize);
-
-    ret = mvncAllocateGraph(dev_handle,&graphHandle,static_cast<void*>(graphFile.get()),graphSize);
-    if (ret != MVNC_OK) {
-      throw std::string("Error: Graph allocation on NCS failed!");
+		ret = ncGraphCreate(graphFileName.c_str(),&graphHandlePtr);
+    if (ret != NC_OK) {
+      throw std::string("Error: Graph Creation failed!");
     }
     
-
-    int dontBlockValue = 0;
-    ret = mvncSetGraphOption(graphHandle,
-        MVNC_DONTBLOCK, &dontBlockValue, sizeof(int));
-    if (ret != MVNC_OK)
-    {
-      throw std::string("Error: Setting MVNC_DONTBLOCK graph option failed!");
+		ret = ncGraphCreate(graphFileName.c_str(),&graphHandlePtr);
+    if (ret != NC_OK) {
+      throw std::string("Error: Graph Creation failed!");
     }
 
-    // Loading tensor, tensor is of a HalfFloat data type 
+		// Allocate graph on NCS
+		ret = ncGraphAllocate(deviceHandle,graphHandlePtr,graphFile.get(),graphSize);
+    if (ret != NC_OK) {
+      throw std::string("Error: Graph Allocation failed!");
+    }
+
+		// Create input FIFO 
+		ret = ncFifoCreate("input1",NC_FIFO_HOST_WO, &inputFIFO); 
+    if (ret != NC_OK) {
+      throw std::string("Error: Unable to create input FIFO!");
+    }
+		unsigned int optionSize = sizeof(inputDescriptor);	
+		ret = ncGraphGetOption(graphHandlePtr,
+							NC_RO_GRAPH_INPUT_TENSOR_DESCRIPTORS,
+							&inputDescriptor,
+							&optionSize);
+    if (ret != NC_OK) {
+      throw std::string("Error: Unable to create input FIFO!");
+    }
+		ret = ncFifoAllocate(inputFIFO, deviceHandle, &inputDescriptor, 2);
+    if (ret != NC_OK) {
+      throw std::string("Error: Unable to allocate input  FIFO! on NCS");
+    }
+
+
+		// Create output FIFO 
+		ret = ncFifoCreate("output1",NC_FIFO_HOST_RO, &outputFIFO);
+    if (ret != NC_OK) {
+      throw std::string("Error: Unable to create output FIFO!");
+    }
+		optionSize = sizeof(outputDescriptor);	
+		ret = ncGraphGetOption(graphHandlePtr,
+							NC_RO_GRAPH_OUTPUT_TENSOR_DESCRIPTORS,
+							&outputDescriptor,
+							&optionSize);
+    if (ret != NC_OK) {
+      throw std::string("Error: Unable to create output FIFO!");
+    }
+		ret = ncFifoAllocate(inputFIFO, deviceHandle, &inputDescriptor, 2);	// Maximum of two elements in a queue
+    if (ret != NC_OK) {
+      throw std::string("Error: Unable to allocate input  FIFO! on NCS");
+    }
+
+    // Loading tensor, tensor is of a float (TODO: HalfFloat) data type 
     std::unique_ptr<unsigned char[]> tensor;
     unsigned int inputLength;
     prepareTensor(tensor, imageFileName, &inputLength);
@@ -340,25 +379,41 @@ int main(int argc, char** argv) {
     void* outputTensor;
     unsigned int outputLength;
     for(int i=0; i< FLAGS_num_reps; ++i) {
-    ret = mvncLoadTensor(graphHandle, tensor.get(), inputLength,
-                         nullptr);  // TODO: What are user params??? 
-    if (ret != MVNC_OK) {
-      throw std::string("Error: Loading Tensor failed!");
-    }
-
-		void* userParam;
-    // This function normally blocks till results are available
-    ret = mvncGetResult(graphHandle,&outputTensor, &outputLength,&userParam);
+			ret = ncFifoWriteElem(inputFIFO,tensor.get(),&inputLength, nullptr);
+			if (ret != NC_OK) {
+				throw std::string("Error: Loading Tensor into input queue failed!");
+			}
+			ret = ncGraphQueueInference(graphHandlePtr,&inputFIFO, 1, &outputFIFO, 1);
+			if (ret != NC_OK) {
+				throw std::string("Error:  Queing inference failed!");
+			}
 		}
+    // This function normally blocks till results are available
+    // Get size of outputFIFO element
+    unsigned int outputFIFOsize;
+    optionSize = sizeof(unsigned int);
+    ret = ncFifoGetOption(outputFIFO, NC_RO_FIFO_ELEMENT_DATA_SIZE, &outputFIFOsize, &optionSize);  
+		if (ret != NC_OK) {
+			throw std::string("Error:  Getting output FIFO single element size failed!");
+		}
+
+		// Getting element
+		std::unique_ptr<unsigned char> output(new unsigned char[outputFIFOsize]);
+    ret = ncFifoReadElem(outputFIFO, output.get(), &outputFIFOsize, nullptr);  
+		if (ret != NC_OK) {
+			throw std::string("Error: Reading element failed !");
+		}
+
     auto t2 = __rdtsc();
 
     std::cout << "---> NCS execution including memory transfer takes " << ((t2 - t1)/(float)FLAGS_num_reps) << " RDTSC cycles time[ms]: " << (t2 -t1)*1000.0f/((float)pi.tsc*FLAGS_num_reps);
     
-    if (ret != MVNC_OK) {
+    if (ret != NC_OK) {
       throw std::string("Error: Getting results from NCS failed!");
     }
-    printPredictions(outputTensor, outputLength);
+   // printPredictions(output.get(), outputLength);
 
+/*
 		// print some performance info
 		unsigned int dataLength = 0;
 		float * data_ptr = nullptr;
@@ -369,12 +424,12 @@ int main(int argc, char** argv) {
 
 		// implement printing of profiling info
 		printProfiling(data_ptr, dataLength/sizeof(float));
+*/
   }
   catch (std::string err) {
     std::cout << err << std::endl;
     exit_code = -1;
   }
-		*/
 
 /*
   // Cleaning up
@@ -383,13 +438,18 @@ int main(int argc, char** argv) {
     std::cerr << "Error: Deallocation of Graph failed!" << std::endl;
   }
 
-	// Close Device
-	if (dev_handle != 0) {
-		ret = mvncCloseDevice(dev_handle);
-		if (ret != MVNC_OK) {
-			std::cerr << "Error: Closing of device: "<< ncs_names[0] <<"failed!" << std::endl;
+*/
+	// Close communitaction with device Device
+	if (deviceHandle != 0) {
+		ret = ncDeviceClose(deviceHandle);
+		if (ret != NC_OK) {
+			std::cerr << "Error: Closing of device: "<<  std::to_string(index-1) <<"failed!" << std::endl;
+		}
+
+		ret = ncDeviceDestroy(&deviceHandle);
+		if (ret != NC_OK) {
+			std::cerr << "Error: Freeing resources of device: "<<  std::to_string(index-1) <<"failed!" << std::endl;
 		}
 	}
-*/
   return exit_code;
 }
