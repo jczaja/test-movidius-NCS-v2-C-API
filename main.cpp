@@ -262,6 +262,62 @@ void printProfiling(float* dataPtr, unsigned int numEntries)
 	std::cout << "Total time: " << std::to_string(totalTime) << " ms"<< std::endl; 			
 }
 */
+
+class NCSDevice
+{
+	public:
+		NCSDevice()
+		{
+			std::cout << "Creating NCS resources" << std::endl;
+			index = 0;  // Index of device to query for
+      ncStatus_t ret = ncDeviceCreate(index,&deviceHandle); // hardcoded max name size 
+      if (ret == NC_OK) {
+        std::cout << "Found NCS named: " << index++ << std::endl;
+      }
+
+			// If not devices present the exit
+			if (index == 0) {
+				throw std::string("Error: No Intel Movidius identified in a system!\n");
+			}
+
+			// Using first devicoftma
+			ret = ncDeviceOpen(deviceHandle);
+			if(ret != NC_OK) {
+				// If we cannot open communication with device then clean up resources
+				destroy();
+				throw std::string("Error: Could not open NCS device: ") + std::to_string(index-1) ;
+			}
+		}
+
+		~NCSDevice()
+		{
+			destroy();
+			// Close communitaction with device Device
+			std::cout << "Closing communication with NCS: " << std::to_string(index-1) << std::endl;
+			ncStatus_t ret = ncDeviceClose(deviceHandle);
+			if (ret != NC_OK) {
+				std::cerr << "Error: Closing of device: "<<  std::to_string(index-1) <<"failed!" << std::endl;
+			}
+		}
+		struct ncDeviceHandle_t* getHandle(void)
+		{
+			return deviceHandle;
+		}
+	private:
+		void destroy(void)
+	  {
+			std::cout << "Destroying NCS resources" << std::endl;
+			ncStatus_t ret = ncDeviceDestroy(&deviceHandle);
+			if (ret != NC_OK) {
+				std::cerr << "Error: Freeing resources of device: "<<  std::to_string(index-1) <<"failed!" << std::endl;
+			}
+		}
+	private:
+		struct ncDeviceHandle_t* deviceHandle = nullptr;
+		int index = 0;
+};
+
+
 int main(int argc, char** argv) {
 
 #ifndef GFLAGS_GFLAGS_H_
@@ -279,8 +335,6 @@ int main(int argc, char** argv) {
   machine.get_platform_info(pi);
   int exit_code = 0;
   ncStatus_t ret = NC_OK;
-	struct ncDeviceHandle_t* deviceHandle = nullptr;
-	int index = 0;  // Index of device to query for
 	struct ncFifoHandle_t* inputFIFO;
 	struct ncFifoHandle_t* outputFIFO;
 	struct ncTensorDescriptor_t inputDescriptor;
@@ -296,22 +350,9 @@ int main(int argc, char** argv) {
     std::string imageFileName(argv[1]);
 		// Set verbose mode for a work with NCS device
 
-    while(ret == NC_OK) {
-      ret = ncDeviceCreate(index++,&deviceHandle); // hardcoded max name size 
-      if (ret == NC_OK) {
-        std::cout << "Found NCS named: " << (index-1) << std::endl;
-      }
-    }
 
-    // If not devices present the exit
-    if (index == 1) {
-      throw std::string("Error: No Intel Movidius identified in a system!\n");
-    }
-    // Using first device
-    ret = ncDeviceOpen(deviceHandle);
-    if(ret != NC_OK) {
-      throw std::string("Error: Could not open NCS device: ") + std::to_string(index-1) ;
-    }
+
+		NCSDevice ncs;
 
 
     // Creation of  graph resources
@@ -323,13 +364,8 @@ int main(int argc, char** argv) {
       throw std::string("Error: Graph Creation failed!");
     }
     
-		ret = ncGraphCreate(graphFileName.c_str(),&graphHandlePtr);
-    if (ret != NC_OK) {
-      throw std::string("Error: Graph Creation failed!");
-    }
-
 		// Allocate graph on NCS
-		ret = ncGraphAllocate(deviceHandle,graphHandlePtr,graphFile.get(),graphSize);
+		ret = ncGraphAllocate(ncs.getHandle(),graphHandlePtr,graphFile.get(),graphSize);
     if (ret != NC_OK) {
       throw std::string("Error: Graph Allocation failed!");
     }
@@ -347,7 +383,7 @@ int main(int argc, char** argv) {
     if (ret != NC_OK) {
       throw std::string("Error: Unable to create input FIFO!");
     }
-		ret = ncFifoAllocate(inputFIFO, deviceHandle, &inputDescriptor, 2);
+		ret = ncFifoAllocate(inputFIFO, ncs.getHandle(), &inputDescriptor, 2);
     if (ret != NC_OK) {
       throw std::string("Error: Unable to allocate input  FIFO! on NCS");
     }
@@ -366,7 +402,7 @@ int main(int argc, char** argv) {
     if (ret != NC_OK) {
       throw std::string("Error: Unable to create output FIFO!");
     }
-		ret = ncFifoAllocate(inputFIFO, deviceHandle, &inputDescriptor, 2);	// Maximum of two elements in a queue
+		ret = ncFifoAllocate(outputFIFO, ncs.getHandle(), &inputDescriptor, 2);	// Maximum of two elements in a queue
     if (ret != NC_OK) {
       throw std::string("Error: Unable to allocate input  FIFO! on NCS");
     }
@@ -425,6 +461,9 @@ int main(int argc, char** argv) {
 		// implement printing of profiling info
 		printProfiling(data_ptr, dataLength/sizeof(float));
 */
+
+
+
   }
   catch (std::string err) {
     std::cout << err << std::endl;
@@ -439,17 +478,5 @@ int main(int argc, char** argv) {
   }
 
 */
-	// Close communitaction with device Device
-	if (deviceHandle != 0) {
-		ret = ncDeviceClose(deviceHandle);
-		if (ret != NC_OK) {
-			std::cerr << "Error: Closing of device: "<<  std::to_string(index-1) <<"failed!" << std::endl;
-		}
-
-		ret = ncDeviceDestroy(&deviceHandle);
-		if (ret != NC_OK) {
-			std::cerr << "Error: Freeing resources of device: "<<  std::to_string(index-1) <<"failed!" << std::endl;
-		}
-	}
   return exit_code;
 }
