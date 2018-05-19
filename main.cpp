@@ -178,17 +178,11 @@ void prepareTensor(std::unique_ptr<unsigned char[]>& input, std::string& imageNa
   cv::Mat mean = cv::Mat(input_geometry, CV_32FC3, net_mean);
   cv::subtract(samplefp32_float, mean, sample_fp32_normalized);
 
-  // Separate channels (caffe format: NCHW)
-  std::vector<cv::Mat> input_channels(net_data_channels);
-  cv::split(sample_fp32_normalized, input_channels);
-
   // TODO: check performance of floats vs halffloat
   input.reset(new unsigned char[sizeof(float)*net_data_width*net_data_height*net_data_channels]);
 	int dst_index = 0;
-	for(auto& mat : input_channels) {
-		for(int i=0; i<net_data_width*net_data_height;++i) {
-			((float*)input.get())[dst_index++] = ((float*)mat.data)[i];
-		}
+	for(int i=0; i<net_data_channels*net_data_width*net_data_height;++i) {
+		((float*)input.get())[dst_index++] = ((float*)samplefp32_float.data)[i];
 	}
 
   *inputLength = sizeof(float)*net_data_width*net_data_height*net_data_channels;
@@ -497,7 +491,6 @@ int main(int argc, char** argv) {
 
     std::cout << "---> NCS execution including memory transfer takes " << ((t2 - t1)/(float)FLAGS_num_reps) << " RDTSC cycles time[ms]: " << (t2 -t1)*1000.0f/((float)pi.tsc*FLAGS_num_reps) << std::endl;
     
-   // printPredictions(output.get(), outputLength);
 
 /*
 		// print some performance info
