@@ -181,7 +181,7 @@ void prepareTensor(std::unique_ptr<unsigned char[]>& input, std::string& imageNa
   // TODO: check performance of floats vs halffloat
   input.reset(new unsigned char[sizeof(float)*net_data_width*net_data_height*net_data_channels]);
 	int dst_index = 0;
-	for(int i=0; i<net_data_channels*net_data_width*net_data_height;++i) {
+	for(unsigned int i=0; i<net_data_channels*net_data_width*net_data_height;++i) {
 		((float*)input.get())[dst_index++] = ((float*)samplefp32_float.data)[i];
 	}
 
@@ -291,7 +291,7 @@ class NCSFifo
 class NCSGraph
 {
 	public:
-		NCSGraph(struct ncDeviceHandle_t* deviceHandle, const std::string& graphFileName) : graphFile(nullptr), input("input",NC_FIFO_HOST_WO), output("output",NC_FIFO_HOST_RO) 
+		NCSGraph(struct ncDeviceHandle_t* deviceHandle, const std::string& graphFileName) : graphFile(nullptr), result(nullptr), input("input",NC_FIFO_HOST_WO), output("output",NC_FIFO_HOST_RO) 
 		{
 			std::cout << "Initializing graph!" << std::endl;
 			// Creation of  graph resources
@@ -325,7 +325,6 @@ class NCSGraph
 				throw std::string("Error: Unable to allocate input  FIFO! on NCS");
 			}
 
-			// TODO: Inspect what is returned here
 			optionSize = sizeof(outputDescriptor);	
 			ret = ncGraphGetOption(graphHandlePtr,
 								NC_RO_GRAPH_OUTPUT_TENSOR_DESCRIPTORS,
@@ -341,6 +340,15 @@ class NCSGraph
 				destroy();
 				throw std::string("Error: Unable to allocate input  FIFO! on NCS");
 			}
+
+			// Get size of outputFIFO element
+			optionSize = sizeof(unsigned int);
+			ret = ncFifoGetOption(output.FIFO_, NC_RO_FIFO_ELEMENT_DATA_SIZE, &outputFIFOsize, &optionSize);  
+			if (ret != NC_OK) {
+				throw std::string("Error:  Getting output FIFO single element size failed!");
+			}
+			// Prepare buffer for reading output
+			result.reset(new unsigned char[outputFIFOsize]);
 		}
 
 		~NCSGraph() {
@@ -352,35 +360,47 @@ class NCSGraph
 			return graphHandlePtr;
 		}
 
-		void infer(std::unique_ptr<unsigned char[]>& tensor, unsigned int inputLength)
+		void infer(std::vector<std::unique_ptr<unsigned char[]> >& tensors, unsigned int inputLength)
 		{
-			ncStatus_t ret = ncFifoWriteElem(input.FIFO_,tensor.get(),&inputLength, nullptr);
-			if (ret != NC_OK) {
-				throw std::string("Error: Loading Tensor into input queue failed!");
+			ncStatus_t ret = NC_OK;
+			for(auto& tensor : tensors) {
+				ret = ncFifoWriteElem(input.FIFO_,tensor.get(),&inputLength, nullptr);
+				if (ret != NC_OK) {
+					throw std::string("Error: Loading Tensor into input queue failed!");
+				}
+				ret = ncGraphQueueInference(graphHandlePtr,&(input.FIFO_), 1, &(output.FIFO_), 1);
+				if (ret != NC_OK) {
+					throw std::string("Error:  Queing inference failed!");
+				}
+			}
+			// How many elements is in input queue
+//			unsigned int inputFIFOelements;
+//			unsigned int optionSize = sizeof(unsigned int);
+//			ret = ncFifoGetOption(input.FIFO_, NC_RO_FIFO_WRITE_FILL_LEVEL, &inputFIFOelements, &optionSize);
+//			if (ret != NC_OK) {
+//				throw std::string("Error:  Getting output FIFO single element size failed!");
+//			}
+//			std::cout << "Number of tensors in a input queue: " << inputFIFOelements << std::endl; 
+
+
+				// How many elements is in output queue
+//			unsigned int outputFIFOelements;
+//			optionSize = sizeof(unsigned int);
+//			ret = ncFifoGetOption(output.FIFO_, NC_RO_FIFO_READ_FILL_LEVEL, &outputFIFOelements, &optionSize);
+//			if (ret != NC_OK) {
+//				throw std::string("Error:  Getting output FIFO amount of element failed!");
+//			}
+//			std::cout << "Number of tensors in a output queue: " << outputFIFOelements << std::endl; 
+
+			// Getting elements
+			for(size_t i=0; i < tensors.size(); ++i) {
+				ret = ncFifoReadElem(output.FIFO_, result.get(), &outputFIFOsize, nullptr);  
+				if (ret != NC_OK) {
+					throw std::string("Error: Reading element failed !");
+				}
+				printPredictions(result.get(),outputFIFOsize);
 			}
 
-			// This function normally blocks till results are available
-			// Get size of outputFIFO element
-			unsigned int outputFIFOsize;
-			unsigned int optionSize = sizeof(unsigned int);
-			ret = ncFifoGetOption(output.FIFO_, NC_RO_FIFO_ELEMENT_DATA_SIZE, &outputFIFOsize, &optionSize);  
-			if (ret != NC_OK) {
-				throw std::string("Error:  Getting output FIFO single element size failed!");
-			}
-
-			ret = ncGraphQueueInference(graphHandlePtr,&(input.FIFO_), 1, &(output.FIFO_), 1);
-			if (ret != NC_OK) {
-				throw std::string("Error:  Queing inference failed!");
-			}
-
-			// Getting element
-			std::unique_ptr<unsigned char> result(new unsigned char[outputFIFOsize]);
-			ret = ncFifoReadElem(output.FIFO_, result.get(), &outputFIFOsize, nullptr);  
-			if (ret != NC_OK) {
-				throw std::string("Error: Reading element failed !");
-			}
-
-			printPredictions(result.get(),outputFIFOsize);
 		}
 
 	private:
@@ -429,20 +449,22 @@ class NCSGraph
 
 			// Print top-1 result (class name , prob)
 			std::ifstream synset_words("./synset_words.txt");
+			std::string top1_class(std::to_string(top1_index));
 			if(synset_words.is_open()) {
-				std::string top1_class;
 				for (int i=0; i<=top1_index; ++i) {
 					std::getline(synset_words,top1_class);	
 				}
-				std::cout << "top-1: " << top1_result << " (" << top1_class << ")" << std::endl;
 			}
+			std::cout << "top-1: " << top1_result << " (" << top1_class << ")" << std::endl;
 		}
 
 	private:
 		std::unique_ptr<char[]> graphFile;
+		std::unique_ptr<unsigned char> result;
 		struct ncGraphHandle_t* graphHandlePtr = nullptr;
 		NCSFifo input;
 		NCSFifo output;
+		unsigned int outputFIFOsize = 0;
 		struct ncTensorDescriptor_t inputDescriptor;
 		struct ncTensorDescriptor_t outputDescriptor;
 };
@@ -467,24 +489,28 @@ int main(int argc, char** argv) {
     
     if(argc < 2 ) {
       throw std::string("ERROR: Wrong syntax. Valid syntax:\n \
-               test-ncs <names of image to process> \n \
+               test-ncs-v2 <names of images to process> \n \
                 ");
     }
-    std::string imageFileName(argv[1]);
+		int i = 0;
+    std::vector<std::string> imagesFileNames(argc - 1);
+		for(auto& vec : imagesFileNames) {
+			vec = std::string(argv[++i]);
+		}
 		// Set verbose mode for a work with NCS device
 
 		NCSDevice ncs;
 		NCSGraph ncsg(ncs.getHandle(),graphFileName);
 
     // Loading tensor, tensor is of a float (TODO: HalfFloat) data type 
-    std::unique_ptr<unsigned char[]> tensor;
+    std::vector<std::unique_ptr<unsigned char[]> > tensors(argc-1);
     unsigned int inputLength;
-    prepareTensor(tensor, imageFileName, &inputLength);
+		for(size_t i=0; i<tensors.size(); ++i) {
+			prepareTensor(tensors[i], imagesFileNames[i], &inputLength);
+		}
     auto t1 = __rdtsc();
-    void* outputTensor;
-    unsigned int outputLength;
     for(int i=0; i< FLAGS_num_reps; ++i) {
-			ncsg.infer(tensor,inputLength);
+			ncsg.infer(tensors,inputLength);
 		}
 
     auto t2 = __rdtsc();
@@ -504,8 +530,6 @@ int main(int argc, char** argv) {
 		// implement printing of profiling info
 		printProfiling(data_ptr, dataLength/sizeof(float));
 */
-
-
 
   }
   catch (std::string err) {
