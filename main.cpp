@@ -15,6 +15,8 @@
 
 DEFINE_int32(num_reps, 1,
     "Number of repetitions of convolutions to be performed");
+DEFINE_string(synset, "./synset_words.txt",
+    "relative path to file describing categories");
 
 const unsigned int net_data_width = 224;
 const unsigned int net_data_height = 224;
@@ -460,7 +462,7 @@ class NCSGraph
 			}
 
 			// Print top-1 result (class name , prob)
-			std::ifstream synset_words("./synset_words.txt");
+			std::ifstream synset_words(FLAGS_synset);
 			std::string top1_class(std::to_string(top1_index));
 			if(synset_words.is_open()) {
 				for (int i=0; i<=top1_index; ++i) {
