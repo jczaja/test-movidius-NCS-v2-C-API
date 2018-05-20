@@ -188,21 +188,6 @@ void prepareTensor(std::unique_ptr<unsigned char[]>& input, std::string& imageNa
   *inputLength = sizeof(float)*net_data_width*net_data_height*net_data_channels;
 }
 
-
-
-/*
-void printProfiling(float* dataPtr, unsigned int numEntries)
-{
-	std::cout << "Performance profiling:" << std::endl;
-	float totalTime = 0.0f;
-	for(int i=0; i<numEntries; ++i) {
-		std::cout << "	" << std::to_string(dataPtr[i]) << " ms"<<std::endl; 			
-		totalTime += dataPtr[i];
-	}
-	std::cout << "Total time: " << std::to_string(totalTime) << " ms"<< std::endl; 			
-}
-*/
-
 class NCSDevice
 {
 	public:
@@ -360,6 +345,35 @@ class NCSGraph
 			return graphHandlePtr;
 		}
 
+		void printProfiling(void) 
+		{
+			unsigned int optionSize = sizeof(unsigned int);
+			unsigned int profilingSize = 0;
+			ncStatus_t ret = ncGraphGetOption(graphHandlePtr,
+                            NC_RO_GRAPH_TIME_TAKEN_ARRAY_SIZE,
+														&profilingSize,
+                            &optionSize);
+			if (ret != NC_OK) {
+				throw std::string("Error:  Getting size of time taken array failed!!");
+			}
+			
+			// Time measures for stages are of float data type
+			std::unique_ptr<float> profilingData(new float[profilingSize/sizeof(float)]);
+			ret = ncGraphGetOption(graphHandlePtr,
+                            NC_RO_GRAPH_TIME_TAKEN,
+														profilingData.get(),
+                            &profilingSize);
+
+			std::cout << "Performance profiling:" << std::endl;
+			float totalTime = 0.0f;
+			for(unsigned int i=0; i<profilingSize/sizeof(float); ++i) {
+				std::cout << "	" << profilingData.get()[i] << " ms"<<std::endl; 			
+				totalTime += profilingData.get()[i];
+			}
+			std::cout << "Total compute time: " << std::to_string(totalTime) << " ms"<< std::endl; 			
+
+		}
+
 		void infer(std::vector<std::unique_ptr<unsigned char[]> >& tensors, unsigned int inputLength)
 		{
 			ncStatus_t ret = NC_OK;
@@ -373,7 +387,8 @@ class NCSGraph
 					throw std::string("Error:  Queing inference failed!");
 				}
 			}
-			// How many elements is in input queue
+
+				// How many elements is in input queue
 //			unsigned int inputFIFOelements;
 //			unsigned int optionSize = sizeof(unsigned int);
 //			ret = ncFifoGetOption(input.FIFO_, NC_RO_FIFO_WRITE_FILL_LEVEL, &inputFIFOelements, &optionSize);
@@ -381,7 +396,6 @@ class NCSGraph
 //				throw std::string("Error:  Getting output FIFO single element size failed!");
 //			}
 //			std::cout << "Number of tensors in a input queue: " << inputFIFOelements << std::endl; 
-
 
 				// How many elements is in output queue
 //			unsigned int outputFIFOelements;
@@ -515,22 +529,10 @@ int main(int argc, char** argv) {
 
     auto t2 = __rdtsc();
 
+		ncsg.printProfiling();
+
     std::cout << "---> NCS execution including memory transfer takes " << ((t2 - t1)/(float)FLAGS_num_reps) << " RDTSC cycles time[ms]: " << (t2 -t1)*1000.0f/((float)pi.tsc*FLAGS_num_reps) << std::endl;
     
-
-/*
-		// print some performance info
-		unsigned int dataLength = 0;
-		float * data_ptr = nullptr;
-		ret = mvncGetGraphOption(graphHandle,MVNC_TIME_TAKEN,reinterpret_cast<void**>(&data_ptr),&dataLength);
-    if (ret != MVNC_OK) {
-      throw std::string("Error: Getting Time taken results failed!");
-    }
-
-		// implement printing of profiling info
-		printProfiling(data_ptr, dataLength/sizeof(float));
-*/
-
   }
   catch (std::string err) {
     std::cout << err << std::endl;
