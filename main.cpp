@@ -178,7 +178,6 @@ void prepareTensor(std::unique_ptr<unsigned char[]>& input, std::string& imageNa
   cv::Mat mean = cv::Mat(input_geometry, CV_32FC3, net_mean);
   cv::subtract(samplefp32_float, mean, sample_fp32_normalized);
 
-  // TODO: check performance of floats vs halffloat
   input.reset(new unsigned char[sizeof(float)*net_data_width*net_data_height*net_data_channels]);
 	int dst_index = 0;
 	for(unsigned int i=0; i<net_data_channels*net_data_width*net_data_height;++i) {
@@ -293,7 +292,6 @@ class NCSGraph
 				destroy();
 				throw std::string("Error: Graph Allocation failed!");
 			}
-			// TODO: Inspect what is returned here
 			unsigned int optionSize = sizeof(inputDescriptor);	
 			ret = ncGraphGetOption(graphHandlePtr,
 								NC_RO_GRAPH_INPUT_TENSOR_DESCRIPTORS,
@@ -516,7 +514,6 @@ int main(int argc, char** argv) {
 		NCSDevice ncs;
 		NCSGraph ncsg(ncs.getHandle(),graphFileName);
 
-    // Loading tensor, tensor is of a float (TODO: HalfFloat) data type 
     std::vector<std::unique_ptr<unsigned char[]> > tensors(argc-1);
     unsigned int inputLength;
 		for(size_t i=0; i<tensors.size(); ++i) {
