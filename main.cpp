@@ -13,10 +13,13 @@
 #include <unistd.h>
 #include "gflags/gflags.h"
 
+DEFINE_bool(profile,false,"Print profiling(times of execution) information");
 DEFINE_int32(num_reps, 1,
     "Number of repetitions of convolutions to be performed");
 DEFINE_string(synset, "./synset_words.txt",
     "relative path to file describing categories");
+DEFINE_string(graph, "./myGoogleNet-shave1",
+    "relative path to graph file");
 
 const unsigned int net_data_width = 224;
 const unsigned int net_data_height = 224;
@@ -194,7 +197,9 @@ class NCSDevice
 	public:
 		NCSDevice()
 		{
+#			ifndef NDEBUG			
 			std::cout << "Creating NCS resources" << std::endl;
+#			endif
 			index = 0;  // Index of device to query for
       ncStatus_t ret = ncDeviceCreate(index,&deviceHandle); // hardcoded max name size 
       if (ret == NC_OK) {
@@ -206,7 +211,7 @@ class NCSDevice
 				throw std::string("Error: No Intel Movidius identified in a system!\n");
 			}
 
-			// Using first devicoftma
+			// Using first device 
 			ret = ncDeviceOpen(deviceHandle);
 			if(ret != NC_OK) {
 				// If we cannot open communication with device then clean up resources
@@ -218,7 +223,9 @@ class NCSDevice
 		~NCSDevice()
 		{
 			// Close communitaction with device Device
+#			ifndef NDEBUG			
 			std::cout << "Closing communication with NCS: " << std::to_string(index-1) << std::endl;
+#			endif
 			ncStatus_t ret = ncDeviceClose(deviceHandle);
 			if (ret != NC_OK) {
 				std::cerr << "Error: Closing of device: "<<  std::to_string(index-1) <<"failed!" << std::endl;
@@ -232,7 +239,9 @@ class NCSDevice
 	private:
 		void destroy(void)
 	  {
+#			ifndef NDEBUG			
 			std::cout << "Destroying NCS resources" << std::endl;
+#			endif
 			ncStatus_t ret = ncDeviceDestroy(&deviceHandle);
 			if (ret != NC_OK) {
 				std::cerr << "Error: Freeing resources of device: "<<  std::to_string(index-1) <<"failed!" << std::endl;
@@ -263,7 +272,9 @@ class NCSFifo
 
 	private:
 		void destroy() {
+#			ifndef NDEBUG			
 			std::cout << "Freeing FIFO!" << std::endl;
+#			endif
 			ncStatus_t ret = ncFifoDestroy(&FIFO_);
 			if (ret != NC_OK) {
 				std::cout << "Error: FIFO destroying failed!" << std::endl;
@@ -279,7 +290,9 @@ class NCSGraph
 	public:
 		NCSGraph(struct ncDeviceHandle_t* deviceHandle, const std::string& graphFileName) : graphFile(nullptr), result(nullptr), input("input",NC_FIFO_HOST_WO), output("output",NC_FIFO_HOST_RO) 
 		{
+#			ifndef NDEBUG			
 			std::cout << "Initializing graph!" << std::endl;
+#			endif
 			// Creation of  graph resources
 			unsigned int graphSize = 0;
 			loadGraphFromFile(graphFile, graphFileName, &graphSize);
@@ -388,24 +401,6 @@ class NCSGraph
 				}
 			}
 
-				// How many elements is in input queue
-//			unsigned int inputFIFOelements;
-//			unsigned int optionSize = sizeof(unsigned int);
-//			ret = ncFifoGetOption(input.FIFO_, NC_RO_FIFO_WRITE_FILL_LEVEL, &inputFIFOelements, &optionSize);
-//			if (ret != NC_OK) {
-//				throw std::string("Error:  Getting output FIFO single element size failed!");
-//			}
-//			std::cout << "Number of tensors in a input queue: " << inputFIFOelements << std::endl; 
-
-				// How many elements is in output queue
-//			unsigned int outputFIFOelements;
-//			optionSize = sizeof(unsigned int);
-//			ret = ncFifoGetOption(output.FIFO_, NC_RO_FIFO_READ_FILL_LEVEL, &outputFIFOelements, &optionSize);
-//			if (ret != NC_OK) {
-//				throw std::string("Error:  Getting output FIFO amount of element failed!");
-//			}
-//			std::cout << "Number of tensors in a output queue: " << outputFIFOelements << std::endl; 
-
 			// Getting elements
 			for(size_t i=0; i < tensors.size(); ++i) {
 				ret = ncFifoReadElem(output.FIFO_, result.get(), &outputFIFOsize, nullptr);  
@@ -438,7 +433,9 @@ class NCSGraph
 		}
 
 		void destroy() {
+#			ifndef NDEBUG			
 			std::cout << "Freeing graph!" << std::endl;
+#			endif
 			ncStatus_t ret = ncGraphDestroy(&graphHandlePtr);
 			if (ret != NC_OK) {
 				std::cout << "Error: Graph destroying failed!" << std::endl;
@@ -469,7 +466,7 @@ class NCSGraph
 					std::getline(synset_words,top1_class);	
 				}
 			}
-			std::cout << "top-1: " << top1_result << " (" << top1_class << ")" << std::endl;
+			std::cout << std::endl << "top-1: " << top1_result << " (" << top1_class << ")" << std::endl;
 		}
 
 	private:
@@ -493,7 +490,6 @@ int main(int argc, char** argv) {
         "    test_ncs [FLAGS]\n");
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 	std::vector<std::string> ncs_names;
-  const std::string graphFileName("myGoogleNet-shave12");
   nn_hardware_platform machine;
   platform_info pi;
   machine.get_platform_info(pi);
@@ -503,7 +499,12 @@ int main(int argc, char** argv) {
     
     if(argc < 2 ) {
       throw std::string("ERROR: Wrong syntax. Valid syntax:\n \
-               test-ncs-v2 <names of images to process> \n \
+               test-ncs-v2 <names of images to process> [options]\n \
+								\n \
+options: \n \
+  profile -- switch on printing profiling information\n \
+  graph -- path name to graph to be used\n \
+  synset -- path name to a file describing categories\n \
                 ");
     }
 		int i = 0;
@@ -514,7 +515,7 @@ int main(int argc, char** argv) {
 		// Set verbose mode for a work with NCS device
 
 		NCSDevice ncs;
-		NCSGraph ncsg(ncs.getHandle(),graphFileName);
+		NCSGraph ncsg(ncs.getHandle(),FLAGS_graph);
 
     std::vector<std::unique_ptr<unsigned char[]> > tensors(argc-1);
     unsigned int inputLength;
@@ -528,9 +529,10 @@ int main(int argc, char** argv) {
 
     auto t2 = __rdtsc();
 
-		ncsg.printProfiling();
-
-    std::cout << "---> NCS execution including memory transfer takes " << ((t2 - t1)/(float)FLAGS_num_reps) << " RDTSC cycles time[ms]: " << (t2 -t1)*1000.0f/((float)pi.tsc*FLAGS_num_reps) << std::endl;
+		if(FLAGS_profile == true) {
+			ncsg.printProfiling();
+			std::cout << "---> NCS execution including memory transfer takes " << ((t2 - t1)/(float)FLAGS_num_reps) << " RDTSC cycles time[ms]: " << (t2 -t1)*1000.0f/((float)pi.tsc*FLAGS_num_reps) << std::endl;
+		}
     
   }
   catch (std::string err) {

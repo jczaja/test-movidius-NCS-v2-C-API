@@ -14,7 +14,6 @@ add_definitions(-std=c++0x)
 endif()
 endif()
 
-
 # GFLAGS
 find_library(GFLAGS_LIB NAMES gflags)
 find_path(GFLAGS_INCLUDES NAMES gflags.h PATHS /usr/include/gflags/)
